@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Runtime data
+downloads/
+data/
+*.part
+*.ytdl
+
+# Secrets — never commit these
+.env
+cookies*.txt
+*.cookies

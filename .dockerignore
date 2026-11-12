@@ -1,0 +1,10 @@
+.venv/
+.git/
+.claude/
+.pytest_cache/
+__pycache__/
+downloads/
+data/
+.env
+cookies*.txt
+tests/

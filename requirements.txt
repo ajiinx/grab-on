@@ -1,0 +1,6 @@
+yt-dlp[default]>=2026.8.19  # [default] adds yt-dlp-ejs (YouTube JS challenge solver)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pytest>=8.0
+httpx2>=2.13  # tests only (FastAPI TestClient)

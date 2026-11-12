@@ -1,0 +1,21 @@
+services:
+  downloader:
+    build: .
+    container_name: media-downloader
+    restart: unless-stopped
+    # Only reachable from this computer. For phone access use `tailscale serve`
+    # on the host (see README) — no need to change this.
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      HOST: 0.0.0.0  # inside the container; the port mapping above limits exposure
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      MAX_CONCURRENT_DOWNLOADS: ${MAX_CONCURRENT_DOWNLOADS:-2}
+      FILE_TTL_MINUTES: ${FILE_TTL_MINUTES:-30}
+      YTDLP_AUTO_UPDATE: ${YTDLP_AUTO_UPDATE:-true}
+      COOKIES_FILE: ${COOKIES_FILE_IN_CONTAINER:-}
+    volumes:
+      - ./downloads:/app/downloads
+      - ./data:/app/data
+      # Optional cookies (then set COOKIES_FILE_IN_CONTAINER=/app/cookies.txt in .env):
+      # - ./cookies.txt:/app/cookies.txt:ro
