@@ -326,3 +326,5 @@ class JobManager:
             job.cancel.set()
         for task in list(self._tasks):
             task.cancel()
+        if self._tasks:
+            await asyncio.gather(*list(self._tasks), return_exceptions=True)
