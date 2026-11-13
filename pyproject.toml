@@ -1,0 +1,30 @@
+[project]
+name = "grab-on"
+version = "0.1.0"
+description = "Self-hosted YouTube, Instagram, Spotify & Twitter/X downloader"
+readme = "README.md"
+authors = [
+    { name = "dev-ajinkya", email = "ajinkyasalunke90@outlook.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "yt-dlp[default]>=2026.8.19",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "mutagen>=1.47",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+grab-on = "app.cli:main"
+grab-server = "app.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.13.8,<0.14.0"]
+build-backend = "uv_build"

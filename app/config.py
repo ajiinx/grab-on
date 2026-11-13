@@ -56,8 +56,17 @@ APP_PASSWORD = os.getenv("APP_PASSWORD") or None
 YTDLP_AUTO_UPDATE = os.getenv("YTDLP_AUTO_UPDATE", "false").lower() in ("1", "true", "yes")
 
 # Per-IP request limits (requests per minute).
-RATE_LIMIT_INFO = int(os.getenv("RATE_LIMIT_INFO", "30"))
-RATE_LIMIT_DOWNLOAD = int(os.getenv("RATE_LIMIT_DOWNLOAD", "10"))
+RATE_LIMIT_INFO = max(1, int(os.getenv("RATE_LIMIT_INFO", "30")))
+RATE_LIMIT_DOWNLOAD = max(1, int(os.getenv("RATE_LIMIT_DOWNLOAD", "10")))
+
+# Allowed CORS origins, e.g. "https://myapp.com,https://client.myapp.com". Empty = same-origin only.
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
+# Reverse proxy IPs trusted to pass X-Forwarded-For headers (e.g. "127.0.0.1,::1,10.0.0.0/8").
+TRUSTED_PROXIES = set(p.strip() for p in os.getenv("TRUSTED_PROXIES", "127.0.0.1,::1").split(",") if p.strip())
+
+# Maximum execution time in seconds for a single download job (prevents hung tasks).
+JOB_TIMEOUT_SECONDS = max(60.0, float(os.getenv("JOB_TIMEOUT_SECONDS", "1800")))
 
 JOBS_DIR = DOWNLOAD_DIR / "jobs"
 HISTORY_DB = DATA_DIR / "history.db"

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from . import spotify
+from . import config, spotify
 from .downloader import DownloadCancelled, download
 from .errors import UserFacingError, friendly_error
 from .extractor import default_subtitle
@@ -46,6 +46,7 @@ class Job:
     files: list[tuple[str, Path]] = field(default_factory=list)
     download_name: str | None = None
     finished_at: float | None = None
+    created_at: float = field(default_factory=time.time)
     cancel: threading.Event = field(default_factory=threading.Event)
     # Replaced on every publish; subscribers await the one they captured.
     _changed: asyncio.Event = field(default_factory=asyncio.Event)
@@ -127,7 +128,9 @@ class JobManager:
                 job.publish(ProgressEvent(stage="cancelled", message="Cancelled."))
                 return
             try:
-                await self._download(job)
+                await asyncio.wait_for(self._download(job), timeout=config.JOB_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                job.publish(ProgressEvent(stage="error", message="Download timed out. The file may be too large or stalled.", error_code="timeout"))
             except DownloadCancelled:
                 job.publish(ProgressEvent(stage="cancelled", message="Cancelled."))
             except Exception as exc:  # noqa: BLE001 — report every failure to the user
@@ -310,6 +313,11 @@ class JobManager:
         now = now or time.time()
         for job_id, job in list(self.jobs.items()):
             if job.finished_at and now - job.finished_at > self.file_ttl:
+                await asyncio.to_thread(remove_dir, job.dir)
+                self.jobs.pop(job_id, None)
+            elif not job.is_finished and now - job.created_at > (config.JOB_TIMEOUT_SECONDS * 2):
+                job.cancel.set()
+                job.publish(ProgressEvent(stage="error", message="Job expired.", error_code="timeout"))
                 await asyncio.to_thread(remove_dir, job.dir)
                 self.jobs.pop(job_id, None)
 

@@ -11,9 +11,12 @@ only `_embed_entity` needs updating.
 
 from __future__ import annotations
 
+import base64
+import ipaddress
 import json
 import logging
 import re
+import socket
 import threading
 import unicodedata
 import urllib.error
@@ -34,6 +37,7 @@ log = logging.getLogger(__name__)
 SPOTIFY_ID = re.compile(r"^[A-Za-z0-9]{22}$")
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 _NEXT_DATA = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S)
+_INITIAL_STATE = re.compile(r'<script id="initial-state"[^>]*>(.*?)</script>', re.S)
 COVER_HOSTS = ("spotifycdn.com", "scdn.co")
 _MAX_COVER_BYTES = 5 * 1024 * 1024
 
@@ -61,11 +65,30 @@ def _embed_entity(kind: str, spotify_id: str) -> dict[str, Any]:
         raise friendly_error(exc) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise UserFacingError("network", "Couldn't reach Spotify. Check your connection and try again.") from exc
+
+    entity = None
     m = _NEXT_DATA.search(html)
-    try:
-        entity = json.loads(m.group(1))["props"]["pageProps"]["state"]["data"]["entity"] if m else None
-    except (KeyError, TypeError, json.JSONDecodeError):
-        entity = None
+    if m:
+        try:
+            entity = json.loads(m.group(1))["props"]["pageProps"]["state"]["data"]["entity"]
+        except (KeyError, TypeError, json.JSONDecodeError):
+            entity = None
+
+    if not entity:
+        m2 = _INITIAL_STATE.search(html)
+        if m2:
+            raw = m2.group(1).strip()
+            data = None
+            try:
+                data = json.loads(raw)
+            except Exception:
+                try:
+                    data = json.loads(base64.b64decode(raw).decode("utf-8"))
+                except Exception:
+                    data = None
+            if isinstance(data, dict):
+                entity = data.get("entity") or data.get("data", {}).get("entity")
+
     if not entity:
         raise UserFacingError("unavailable", f"Couldn't read that {kind} from Spotify. It may be private, or Spotify changed its page.")
     return entity
@@ -240,7 +263,9 @@ def find_match(track: SpotifyTrack) -> TrackMatch:
     "official audio" steers the search towards the artist's own audio upload
     (no video intro, album version); the plain query is the fallback.
     """
-    base = f"{track.artists[0]} - {track.title}"
+    clean_artist = re.sub(r"[\r\n\t]+", " ", track.artists[0]).strip()
+    clean_title = re.sub(r"[\r\n\t]+", " ", track.title).strip()
+    base = f"{clean_artist} - {clean_title}"
     scored: list[tuple[float, dict]] = []
     for query in (f"{base} official audio", base):
         scored = [(s, c) for c in search_youtube(query) if (s := score_candidate(track, c)) is not None]
@@ -263,25 +288,81 @@ def find_match(track: SpotifyTrack) -> TrackMatch:
 # --------------------------------------------------------------------------- #
 
 
+def _is_safe_ip(host: str) -> bool:
+    try:
+        # Check if already an IP
+        try:
+            ip = ipaddress.ip_address(host)
+            return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+        except ValueError:
+            pass
+        addr_info = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+        for addr in addr_info:
+            ip = ipaddress.ip_address(addr[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+                return False
+        return bool(addr_info)
+    except (socket.gaierror, ValueError, OSError):
+        return False
+
+
 def _cover_allowed(url: str) -> bool:
-    parts = urllib.parse.urlsplit(url)
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
     host = (parts.hostname or "").lower()
-    return parts.scheme == "https" and any(host == h or host.endswith("." + h) for h in COVER_HOSTS)
+    return (
+        parts.scheme == "https"
+        and parts.port in (None, 443)
+        and not parts.username
+        and any(host == h or host.endswith("." + h) for h in COVER_HOSTS)
+    )
+
+
+class _CoverRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            parts = urllib.parse.urlsplit(newurl)
+            host = (parts.hostname or "").lower()
+            if not _cover_allowed(newurl) or not _is_safe_ip(host):
+                return None
+        except Exception:
+            return None
+        return urllib.request.Request(newurl, headers=req.headers)
+
+
+_cover_opener = urllib.request.build_opener(_CoverRedirectHandler)
 
 
 def fetch_cover(url: str | None) -> bytes | None:
     if not url or not _cover_allowed(url):
         return None
     try:
-        data = _http_get(url, _MAX_COVER_BYTES + 1)
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        if not _is_safe_ip(host):
+            return None
+        req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept-Language": "en"})
+        with _cover_opener.open(req, timeout=15) as resp:
+            data = resp.read(_MAX_COVER_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError):
         return None
     return data if len(data) <= _MAX_COVER_BYTES else None
 
 
+def _cover_format(cover: bytes | None) -> tuple[str, int] | None:
+    if not cover or len(cover) < 4:
+        return None
+    from mutagen.mp4 import MP4Cover
+    if cover.startswith(b"\x89PNG"):
+        return "image/png", MP4Cover.FORMAT_PNG
+    return "image/jpeg", MP4Cover.FORMAT_JPEG
+
+
 def write_tags(path: Path, track: SpotifyTrack, cover: bytes | None) -> None:
     """Write Spotify's title/artist/album/date/track number and cover into MP3 or M4A."""
     ext = path.suffix.lower()
+    img_info = _cover_format(cover)
     if ext == ".mp3":
         from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPE1, TPE2, TRCK, ID3NoHeaderError
 
@@ -300,7 +381,8 @@ def write_tags(path: Path, track: SpotifyTrack, cover: bytes | None) -> None:
         if track.track_number:
             tags.add(TRCK(encoding=3, text=str(track.track_number)))
         if cover:
-            tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=cover))
+            mime = img_info[0] if img_info else "image/jpeg"
+            tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=cover))
         tags.save(path, v2_version=3)  # ID3v2.3 is what Windows Explorer and most players read best
     elif ext in (".m4a", ".mp4"):
         from mutagen.mp4 import MP4, MP4Cover
@@ -319,7 +401,8 @@ def write_tags(path: Path, track: SpotifyTrack, cover: bytes | None) -> None:
         if track.track_number:
             tags["trkn"] = [(track.track_number, 0)]
         if cover:
-            tags["covr"] = [MP4Cover(cover, imageformat=MP4Cover.FORMAT_JPEG)]
+            img_fmt = img_info[1] if img_info else MP4Cover.FORMAT_JPEG
+            tags["covr"] = [MP4Cover(cover, imageformat=img_fmt)]
         audio.save()
     # Other containers (rare fallbacks like .webm/.opus) keep YouTube's tags.
 

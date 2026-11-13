@@ -44,6 +44,9 @@ class History:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
+            self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA busy_timeout = 5000")
+            self._conn.execute("PRAGMA synchronous = NORMAL")
             self._conn.execute(_SCHEMA)
             columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(history)")}
             for column, ddl in _MIGRATIONS.items():
@@ -67,13 +70,17 @@ class History:
     ) -> HistoryItem:
         created = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._lock:
-            cur = self._conn.execute(
-                "INSERT INTO history (url, platform, title, uploader, thumbnail, option_id, option_label, ext,"
-                " filesize, item_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (url, platform, title, uploader, thumbnail, option_id, option_label, ext, filesize, item_count, created),
-            )
-            self._conn.commit()
-            row_id = cur.lastrowid
+            try:
+                cur = self._conn.execute(
+                    "INSERT INTO history (url, platform, title, uploader, thumbnail, option_id, option_label, ext,"
+                    " filesize, item_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (url, platform, title, uploader, thumbnail, option_id, option_label, ext, filesize, item_count, created),
+                )
+                self._conn.commit()
+                row_id = cur.lastrowid
+            except Exception:
+                self._conn.rollback()
+                raise
         return self.get(row_id)  # type: ignore[return-value]
 
     def get(self, item_id: int) -> HistoryItem | None:
@@ -88,8 +95,12 @@ class History:
 
     def delete(self, item_id: int) -> bool:
         with self._lock:
-            cur = self._conn.execute("DELETE FROM history WHERE id = ?", (item_id,))
-            self._conn.commit()
+            try:
+                cur = self._conn.execute("DELETE FROM history WHERE id = ?", (item_id,))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
         return cur.rowcount > 0
 
     def close(self) -> None:

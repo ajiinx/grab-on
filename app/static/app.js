@@ -50,7 +50,10 @@ function humanDuration(sec) {
 }
 
 function timeAgo(iso) {
-  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (!iso) return "";
+  const parsed = new Date(iso).getTime();
+  if (isNaN(parsed)) return "";
+  const diff = (Date.now() - parsed) / 1000;
   if (diff < 60) return "just now";
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
@@ -233,10 +236,11 @@ function renderOptions(info) {
   box.replaceChildren();
   for (const opt of info.options) {
     const size = opt.filesize ? `~${humanSize(opt.filesize)}` : "";
+    const iconPath = ICONS[opt.kind] || ICONS.video;
     const btn = el(
       "button",
       { type: "button", className: `option ${opt.kind}` },
-      el("span", { className: "icon" }, svgIcon(ICONS[opt.kind])),
+      el("span", { className: "icon" }, svgIcon(iconPath)),
       el("span", { className: "label", textContent: opt.label }),
       el("span", { className: "detail", textContent: opt.detail }),
       el("span", { className: "size", textContent: size }),
@@ -314,14 +318,18 @@ function listen(jobId) {
   const src = new EventSource(`/api/progress/${jobId}`);
   state.source = src;
   src.onmessage = (msg) => {
-    const ev = JSON.parse(msg.data);
-    renderProgress(ev);
-    if (ev.stage === "done") {
-      closeSource();
-      onDone(jobId, ev);
-    } else if (ev.stage === "error" || ev.stage === "cancelled") {
-      closeSource();
-      finishProgress("failed", ev.stage === "error" ? ev.message : null);
+    try {
+      const ev = JSON.parse(msg.data);
+      renderProgress(ev);
+      if (ev.stage === "done") {
+        closeSource();
+        onDone(jobId, ev);
+      } else if (ev.stage === "error" || ev.stage === "cancelled") {
+        closeSource();
+        finishProgress("failed", ev.stage === "error" ? ev.message : null);
+      }
+    } catch (err) {
+      console.warn("Malformed progress event:", err);
     }
   };
   src.onerror = async () => {

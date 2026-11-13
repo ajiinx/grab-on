@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import ipaddress
 import logging
 import re
 import secrets
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -61,19 +63,42 @@ class InfoCache:
 class RateLimiter:
     """Sliding-window limiter: at most `limit` hits per `window` seconds per key."""
 
-    def __init__(self, limit: int, window: float = 60.0):
-        self.limit, self.window = limit, window
-        self._hits: dict[str, deque[float]] = defaultdict(deque)
+    def __init__(self, limit: int, window: float = 60.0, max_keys: int = 10000):
+        self.limit, self.window, self.max_keys = limit, window, max_keys
+        self._hits: dict[str, deque[float]] = {}
+        self._last_prune = time.monotonic()
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
-        q = self._hits[key]
+        if now - self._last_prune > self.window:
+            self._prune(now)
+            self._last_prune = now
+
+        q = self._hits.get(key)
+        if q is None:
+            if len(self._hits) >= self.max_keys:
+                self._prune(now)
+                if len(self._hits) >= self.max_keys:
+                    return False
+            q = deque()
+            self._hits[key] = q
+
         while q and now - q[0] > self.window:
             q.popleft()
         if len(q) >= self.limit:
             return False
         q.append(now)
         return True
+
+    def _prune(self, now: float) -> None:
+        to_delete = []
+        for k, q in self._hits.items():
+            while q and now - q[0] > self.window:
+                q.popleft()
+            if not q:
+                to_delete.append(k)
+        for k in to_delete:
+            self._hits.pop(k, None)
 
 
 info_cache = InfoCache()
@@ -84,7 +109,17 @@ update_status: dict[str, str | None] = {"latest": None}
 
 
 def client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    raw_ip = request.client.host if request.client else "unknown"
+    if raw_ip in config.TRUSTED_PROXIES:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            first_ip = forwarded.split(",")[0].strip()
+            if first_ip:
+                return first_ip
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
+    return raw_ip
 
 
 def check_rate(limiter: RateLimiter, request: Request) -> None:
@@ -147,6 +182,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Media Downloader", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
+if config.ALLOWED_ORIGINS:
+    from fastapi.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.ALLOWED_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 
 @app.exception_handler(UserFacingError)
 async def user_error_handler(_: Request, exc: UserFacingError) -> JSONResponse:
@@ -157,6 +203,15 @@ async def user_error_handler(_: Request, exc: UserFacingError) -> JSONResponse:
 @app.exception_handler(HTTPException)
 async def http_error_handler(_: Request, exc: HTTPException) -> JSONResponse:
     return JSONResponse({"error": "http", "message": str(exc.detail)}, status_code=exc.status_code, headers=exc.headers)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONResponse:
+    log.exception("Unhandled server exception: %s", exc)
+    return JSONResponse(
+        {"error": "internal_error", "message": "An unexpected server error occurred. Please try again later."},
+        status_code=500,
+    )
 
 
 def _password_ok(header: str | None) -> bool:
@@ -355,12 +410,21 @@ THUMB_HOSTS = (
 THUMB_MAX_BYTES = 5 * 1024 * 1024
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):  # redirects could leave the allow-list
-        return None
-
-
-_thumb_opener = urllib.request.build_opener(_NoRedirect)
+def _is_safe_ip(host: str) -> bool:
+    try:
+        try:
+            ip = ipaddress.ip_address(host)
+            return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+        except ValueError:
+            pass
+        addr_info = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+        for addr in addr_info:
+            ip = ipaddress.ip_address(addr[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+                return False
+        return bool(addr_info)
+    except (socket.gaierror, ValueError, OSError):
+        return False
 
 
 def _thumb_allowed(url: str) -> bool:
@@ -377,7 +441,26 @@ def _thumb_allowed(url: str) -> bool:
     )
 
 
+class _ThumbRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            parts = urlsplit(newurl)
+            host = (parts.hostname or "").lower()
+            if not _thumb_allowed(newurl) or not _is_safe_ip(host):
+                return None
+        except Exception:
+            return None
+        return urllib.request.Request(newurl, headers=req.headers)
+
+
+_thumb_opener = urllib.request.build_opener(_ThumbRedirectHandler)
+
+
 def _fetch_thumb(url: str) -> tuple[bytes, str]:
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if not _is_safe_ip(host):
+        raise ValueError("Host resolved to private or unsafe IP")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with _thumb_opener.open(req, timeout=10) as resp:
         ctype = resp.headers.get_content_type()

@@ -46,8 +46,8 @@ _YT_PATH = re.compile(r"^/(?:shorts|live|embed|v)/([A-Za-z0-9_-]{11})/?$")
 # Optional username prefix: instagram.com/<user>/reel/<code>/ also exists.
 _IG_PATH = re.compile(r"^/(?:[A-Za-z0-9_.]+/)?(p|reel|reels|tv)/([A-Za-z0-9_-]+)/?$")
 
-# Localised links look like /intl-de/track/<id>.
-_SP_PATH = re.compile(r"^/(?:intl-[a-z]{2}(?:-[A-Za-z]{2})?/)?(track|album|playlist)/([A-Za-z0-9]{22})/?$")
+# Localised links look like /intl-de/track/<id> or /intl-es-419/track/<id>.
+_SP_PATH = re.compile(r"^/(?:intl-[a-zA-Z0-9_-]+/)?(track|album|playlist)/([A-Za-z0-9]{22})/?$")
 
 # User or i/web prefix: twitter.com/<user>/status/<id>, x.com/<user>/status/<id>/video/1
 _TWITTER_PATH = re.compile(r"^/(?:([A-Za-z0-9_]+)/status(?:es)?|i/(?:web/)?status)/([0-9]+)(?:/(?:video|photo)/([0-9]+))?/?$")

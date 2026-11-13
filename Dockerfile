@@ -26,5 +26,5 @@ RUN mkdir -p /app/data /app/downloads
 
 EXPOSE 8000
 HEALTHCHECK --interval=60s --timeout=5s --start-period=20s \
-  CMD python -c "import urllib.request,os,sys; sys.exit(0) if os.getenv('APP_PASSWORD') else urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"
+  CMD python -c "import os, sys, urllib.request, base64; p=os.getenv('APP_PASSWORD'); h={'Authorization':'Basic '+base64.b64encode((':'+p).encode()).decode()} if p else {}; sys.exit(0 if urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8000/api/health', headers=h), timeout=4).status == 200 else 1)"
 CMD ["python", "-m", "app"]

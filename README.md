@@ -1,272 +1,298 @@
-# Grab — self-hosted YouTube, Instagram, Spotify & Twitter/X downloader
+# Grab — Self-Hosted Media Downloader (Production Release)
 
-A small, ad-free web app for personal use. Paste a YouTube, Instagram, Spotify or
-Twitter/X link, pick from a short list of options (Best/4K, 1080p, 720p, 480p, MP3, M4A) and
-the file downloads to your browser. Runs on your own machine; built on
-[yt-dlp](https://github.com/yt-dlp/yt-dlp) and ffmpeg.
+A fast, lightweight, ad-free media downloading service built with **FastAPI**, **yt-dlp**, and **ffmpeg**. Designed for personal and home-server hosting.
 
-> **Legal:** personal use only, for content you own or have the right to download.
-> Downloading may violate YouTube's, Instagram's or Spotify's terms of service.
-> Not intended to be hosted publicly.
+Paste a **YouTube**, **Instagram**, **Spotify**, or **Twitter/X** link, choose from a clean list of curated format options (Best/4K, 1080p, 720p, 480p, MP3, M4A), and stream the file directly to your browser.
+
+> **Legal Disclaimer:** For personal use only, with content you own or have the explicit right to download. Downloading may violate third-party terms of service. Not intended for public commercial hosting.
 
 ---
 
-## Quick start (local, Windows/macOS/Linux)
+## Features
 
-Requirements: **Python 3.11+**, **ffmpeg**, and ideally a JavaScript runtime
-(**Deno** or **Node.js**) — YouTube needs one to unlock all formats.
+- **Multi-Platform Support**:
+  - **YouTube**: Videos, Shorts, live/embed links, and playlists (up to 200 videos). Subtitle embedding & SRT downloads.
+  - **Instagram**: Reels, single posts, and multi-video carousels.
+  - **Spotify**: Tracks, albums, and playlists. Extracts public metadata & cover art, matches official audio on YouTube, and embeds ID3/MP4 metadata with artwork.
+  - **Twitter / X**: Single videos, vertical videos, and multi-video status posts.
+- **Production Hardened**:
+  - **Zero-SSRF Architecture**: Strict CDN hostname allow-list with resolved IP validation blocking private/loopback/cloud metadata networks (`127.0.0.1`, `10.0.0.0/8`, `169.254.169.254`). Safe redirect validation prevents open redirect exploits.
+  - **Concurrency & Deadlock Prevention**: Configurable concurrency semaphore with per-job execution timeouts preventing hung tasks from locking workers.
+  - **High-Performance SQLite Store**: History database with WAL (`Write-Ahead Logging`) mode, busy timeouts, and automatic schema migrations.
+  - **Sliding-Window Rate Limiting**: Per-IP throttling with automatic memory pruning to prevent memory leaks, plus reverse proxy header support (`X-Forwarded-For`).
+  - **Streaming ZIP Bundling**: Multi-file downloads are zipped dynamically on the fly without temporary disk duplication.
+  - **Security Headers & Auth**: Built-in CSP, strict frame options, and timing-safe HTTP Basic Auth.
+
+---
+
+## Quick Start (Development & Local Run)
+
+### Prerequisites
+
+- **Python 3.11+** (tested on Python 3.13)
+- **ffmpeg & ffprobe**
+- **JavaScript Runtime (Deno or Node.js)** — recommended for YouTube player challenge solving
+
+### 1. Install System Dependencies
 
 ```bash
-# 1. ffmpeg (pick your OS)
-winget install Gyan.FFmpeg          # Windows
-brew install ffmpeg                 # macOS
-sudo apt install ffmpeg             # Debian/Ubuntu
+# Windows
+winget install Gyan.FFmpeg denoland.deno
 
-# 2. Python environment
-python -m venv .venv
-.venv\Scripts\activate              # Windows  (macOS/Linux: source .venv/bin/activate)
+# macOS
+brew install ffmpeg deno
+
+# Debian / Ubuntu Linux
+sudo apt update && sudo apt install -y ffmpeg
+# Deno install:
+curl -fsSL https://deno.land/install.sh | sh
+```
+
+### 2. Setup Virtual Environment
+
+```bash
+# Clone the repository and navigate into it
+cd grab-on
+
+# Create virtual environment (Python 3.11+)
+python3 -m venv .venv
+
+# Activate virtual environment
+source .venv/bin/activate       # Linux / macOS
+# On Windows: .venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
+```
 
-# 3. (optional) settings
-copy .env.example .env              # macOS/Linux: cp .env.example .env
+### 3. Configure Environment
 
-# 4. Run
+```bash
+cp .env.example .env
+```
+
+### 4. Run Development Server
+
+```bash
+python run.py
+# Or:
 python -m app
 ```
 
-Open **http://127.0.0.1:8000**. The server only listens on this computer by default.
+Open **http://127.0.0.1:8000** in your browser.
 
-**Windows shortcut:** double-click `start.bat`. It sets up `.venv` on first run,
-starts the server and opens the browser. Close the window to stop it. Right-click
-→ *Send to → Desktop (create shortcut)* for a desktop icon.
+---
 
-### Command line
+## Production Deployment
 
-The same engine works without the web UI:
+### Option 1: Docker & Docker Compose (Recommended)
 
-```bash
-python -m app.cli "https://youtu.be/aqz-KE-bpKQ"           # list options
-python -m app.cli "https://youtu.be/aqz-KE-bpKQ" -o 720     # download 720p into ./downloads
-python -m app.cli "https://youtu.be/aqz-KE-bpKQ" -o mp3 --out D:\Music
-```
-
-## Docker
+The included `Dockerfile` builds a production image based on `python:3.12-slim` containing `ffmpeg`, `ca-certificates`, and `Deno`, running under an unprivileged `app` user (UID 1000).
 
 ```bash
+# 1. Create persistent host directories with proper ownership
+mkdir -p data downloads
+
+# 2. Start container in detached mode
 docker compose up -d --build
 ```
 
-Then open http://127.0.0.1:8000. The image includes ffmpeg and Deno, runs as a
-non-root user (uid 1000) and auto-updates yt-dlp on every start
-(`YTDLP_AUTO_UPDATE=true`). History lives in `./data`, temporary files in
-`./downloads`. On Linux, create those folders first so they are owned by you:
-`mkdir -p data downloads`.
+Container features:
+- Runs as non-root user `app`.
+- Internal container healthcheck with automated authentication support (`/api/health`).
+- Auto-updates `yt-dlp` on startup (`YTDLP_AUTO_UPDATE=true`).
+- Persistent storage for `data/history.db` and temporary job files in `downloads/`.
 
-Settings go in `.env` next to `docker-compose.yml` (see `.env.example`).
-
-## Using it
-
-1. Paste a link — `youtube.com/watch`, `youtu.be`, `/shorts/`, a YouTube
-   `/playlist?list=…`, an Instagram `/reel/` or `/p/` post, or a Twitter/X post. Pasting fetches
-   automatically.
-2. Pick an option. Only formats that actually exist for that video are shown, with
-   size estimates. Video options prefer H.264 + AAC so files play everywhere;
-   above 1080p YouTube only offers VP9/AV1, which is still saved as MP4 (MKV if needed).
-3. Watch progress (download → merging/converting). The file is saved by your
-   browser when done; tap **Save file** if it didn't start (some mobile browsers).
-4. **History** lists past downloads: tap the title to see the options again, the
-   arrow to download the same option again, or the bin to remove the entry.
-
-### Playlists and carousels
-
-- Paste a playlist link to get a checklist of its videos (up to 200; private and
-  deleted ones are skipped). Pick some or all, then an option. Videos download one
-  after another; if one fails, the rest still go through.
-- Several files arrive as one **ZIP** (built while streaming, so no extra disk
-  space), and each file also gets its own link — handier on a phone.
-- Playlist options say "1080p — or lower if unavailable", because each video's
-  formats are only known once it downloads.
-- A `watch?v=…&list=…` link opens that one video, with an **Open the whole
-  playlist** link.
-- Instagram posts with several videos (carousels) work the same way; a carousel
-  with one video is treated as a single video.
-
-### Spotify
-
-Paste an `open.spotify.com` **track, album or playlist** link.
-
-Spotify's own audio is DRM-protected and is never downloaded. Instead the app:
-
-1. reads the song details from Spotify's public embed page (title, artists,
-   duration, cover art — no Spotify account or API key needed);
-2. searches YouTube for the same recording and scores the results: duration must
-   match within a few seconds, the artist's own channel / "Artist - Topic" uploads
-   win over re-uploads, and live, cover, remix, karaoke, sped-up etc. versions are
-   ruled out unless the Spotify title says so;
-3. downloads that audio and writes **Spotify's** title, artist, album, release date,
-   track number and cover art into the file, named `Artist - Title.mp3`.
-
-For a single track the preview shows **"Audio from YouTube: …"** with a link, so a
-wrong match is easy to spot before downloading. Albums and playlists get the same
-checklist as YouTube playlists; each track is matched when it downloads, and a
-track that can't be found is skipped and reported.
-
-Options are **M4A** (the YouTube audio as-is — best quality, no re-encode) and
-**MP3** (re-encoded for compatibility; it can't be better than the source,
-typically ~130–160 kbps AAC/Opus). Limitations: Spotify's embed lists roughly the
-first 100 tracks of a playlist; artist pages, podcasts and short `spotify.link`
-links aren't supported (open the short link and copy the full URL).
-
-### Subtitles
-
-When a video has subtitles, a **Subtitles** picker appears. It lists uploaded
-subtitles plus YouTube's auto-generated captions in the original language.
-
-- Choose a language, then any video option: the subtitles are embedded in the MP4
-  as a soft track you can switch on in your player.
-- Or tap **Subtitles (SRT file)** to download just the subtitles.
-
-### Tags and cover art
-
-Downloads get the title, channel (artist), upload date, source URL and chapters
-written into the file, and the thumbnail embedded as cover art — so MP3s show
-artwork in music players. Disable with `EMBED_METADATA=false`.
-
-Finished files are deleted from the server after `FILE_TTL_MINUTES` (default 30)
-and on every restart — the server is a pass-through, not a library.
-
-## Phone access with Tailscale
-
-Don't expose the app to the public internet. Use [Tailscale](https://tailscale.com/)
-so only your own devices can reach it.
-
-1. Install Tailscale on the computer running the app and on your phone; sign in to
-   both with the same account.
-2. Keep the app on `127.0.0.1` and let Tailscale proxy it with HTTPS:
-
-   ```bash
-   tailscale serve --bg 8000
-   ```
-
-   Tailscale prints a URL like `https://your-pc.tailnet-name.ts.net` — open it on your
-   phone. HTTPS also enables the **Paste** button (browsers only allow clipboard
-   access on secure pages). Stop with `tailscale serve --https=443 off`.
-3. Optional extra lock: set `APP_PASSWORD` in `.env` and restart. The browser will
-   ask for it once (username can be anything).
-
-*Alternative:* set `HOST=0.0.0.0` (or your Tailscale IP, `100.x.y.z`) and open
-`http://100.x.y.z:8000`. Always set `APP_PASSWORD` if you do this.
-
-Tip: on Android you can bookmark `https://…ts.net/?url=` — the app reads a `url`
-query parameter and fetches it automatically.
-
-## Keeping yt-dlp up to date
-
-YouTube and Instagram change often, and an old yt-dlp is the #1 cause of failures.
-The app checks PyPI on startup and shows a banner when an update exists.
-
+To inspect logs:
 ```bash
-pip install -U "yt-dlp[default]"            # local
-docker compose restart                       # Docker (auto-updates on start)
+docker compose logs -f downloader
 ```
 
-Or set `YTDLP_AUTO_UPDATE=true` to upgrade on every start.
+To stop:
+```bash
+docker compose down
+```
 
-## Cookies (age-restricted / login-only content)
+### Option 2: Systemd Service (Linux Server)
 
-Some content needs a logged-in session: private or login-gated Instagram posts,
-age-restricted YouTube videos, or YouTube's "confirm you're not a bot" check.
-Instagram also frequently strips audio or refuses requests from logged-out clients.
-
-**Option A — read from your browser** (local runs only):
+Create `/etc/systemd/system/grab.service`:
 
 ```ini
-COOKIES_FROM_BROWSER=firefox            # or chrome, edge, brave, "chrome:Profile 1"
+[Unit]
+Description=Grab Media Downloader
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/grab-on
+EnvironmentFile=/opt/grab-on/.env
+ExecStart=/opt/grab-on/.venv/bin/python -m app
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-Chrome/Edge on Windows lock their cookie database while running; Firefox is the
-most reliable choice.
-
-**Option B — cookies.txt file:**
-
-1. Export cookies for `youtube.com` / `instagram.com` in Netscape format with a
-   browser extension such as "Get cookies.txt LOCALLY".
-2. Save as `cookies.txt` in this folder (it's git-ignored) and set
-   `COOKIES_FILE=cookies.txt`. For Docker, uncomment the cookies volume in
-   `docker-compose.yml` and set `COOKIES_FILE_IN_CONTAINER=/app/cookies.txt`.
-
-Cookies are as sensitive as your password: **never commit them** (`.gitignore`
-already excludes `cookies*.txt` and `.env`). Using an account for downloading can
-get it rate-limited; consider a secondary account.
-
-## Configuration
-
-All settings are environment variables (or `.env`); see `.env.example`.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `HOST` / `PORT` | `127.0.0.1` / `8000` | Bind address |
-| `APP_PASSWORD` | — | Require HTTP Basic auth (any username) |
-| `COOKIES_FILE` / `COOKIES_FROM_BROWSER` | — | See *Cookies* |
-| `FFMPEG_LOCATION` | — | Folder with ffmpeg if it isn't on PATH |
-| `JS_RUNTIMES` | `deno,node,bun` | JS runtimes yt-dlp may use for YouTube |
-| `YTDLP_AUTO_UPDATE` | `false` (Docker: `true`) | `pip install -U yt-dlp` on start |
-| `EMBED_METADATA` | `true` | Write tags, chapters and cover art into files |
-| `MAX_CONCURRENT_DOWNLOADS` | `2` | Parallel downloads |
-| `FILE_TTL_MINUTES` | `30` | How long finished files are kept |
-| `RATE_LIMIT_INFO` / `RATE_LIMIT_DOWNLOAD` | `30` / `10` | Requests per minute per IP |
-
-## API
-
-| Method | Path | |
-| --- | --- | --- |
-| `POST` | `/api/info` | `{url}` → title, thumbnail, duration, uploader, curated `options`, `subtitles`; playlists add `kind: "playlist"` and `entries` |
-| `POST` | `/api/download` | `{url, option_id, items?, subtitle?}` → `{job_id}` (`items`: playlist indices) |
-| `GET` | `/api/progress/{job_id}` | Server-Sent Events: `{stage, percent, speed, eta, …}` |
-| `GET` | `/api/jobs/{job_id}` | Current job state (polling alternative) |
-| `POST` | `/api/jobs/{job_id}/cancel` | Cancel a queued/running job |
-| `GET` | `/api/file/{job_id}` | The finished file (streamed, supports Range); a ZIP for multi-file playlist jobs |
-| `GET` | `/api/file/{job_id}/{n}` | File *n* of a playlist job |
-| `GET` / `DELETE` | `/api/history`, `/api/history/{id}` | Download history |
-| `GET` | `/api/health` | yt-dlp/ffmpeg versions, update availability |
-
-## Why not Vercel / serverless?
-
-Downloads take minutes (serverless functions time out), need ffmpeg and scratch
-disk, and YouTube/Instagram aggressively block datacenter IPs. Your home connection
-is the right place to run this.
-
-## Troubleshooting
-
-| Symptom | Fix |
-| --- | --- |
-| "ffmpeg isn't installed" banner / red dot | Install ffmpeg (above) or set `FFMPEG_LOCATION`, restart |
-| "Confirm you're not a bot" / "requires logging in" | Configure cookies |
-| Everything suddenly fails for one site | Update yt-dlp |
-| Instagram video has no audio option | Instagram hid the audio track from a logged-out request — configure cookies |
-| Only low resolutions on YouTube | Install Deno or Node.js so yt-dlp can solve YouTube's JS challenge |
-| Download doesn't start on iPhone | Tap **Save file**; Safari saves into the Files app → Downloads |
-| "Playlist is empty" | It's private, or all its videos are private/deleted |
-| No Subtitles picker | The video has no uploaded subtitles or original-language captions |
-| Spotify: wrong song downloaded | Check the "Audio from YouTube" link; rare for official releases, likelier for obscure tracks |
-| Spotify: "Couldn't read that … from Spotify" | Private playlist, or Spotify changed its embed page (update the app) |
-| `Address already in use` | Another app uses port 8000 — set `PORT=8001` |
-
-Run the tests with `pytest`.
-
-## Project layout
-
+Enable and start:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now grab
 ```
-app/
-  main.py         FastAPI routes, auth, rate limiting, SSE, thumbnail proxy
-  extractor.py    URL validation + yt-dlp info + option curation
-  spotify.py      Spotify metadata, YouTube matching, tagging
-  downloader.py   one download: yt-dlp options, progress hooks, ffmpeg steps
-  jobs.py         background queue (concurrency limit, cancel, cleanup)
-  storage.py      SQLite history + temp folder cleanup
-  models.py       pydantic models
-  config.py       environment settings
-  cli.py          command-line interface
-  static/         index.html, style.css, app.js
-tests/            URL validation, option curation, API, playlists/subtitles, Spotify
+
+### Option 3: Remote Access with Tailscale (Recommended over Public Exposure)
+
+Do not expose the application directly to the public internet without authentication. Tailscale provides end-to-end encrypted mesh networking:
+
+```bash
+# Keep HOST=127.0.0.1 and serve via Tailscale HTTPS
+tailscale serve --bg 8000
 ```
+
+Access the service from your phone or laptop at `https://your-node-name.ts.net`.
+
+---
+
+## Environment Variables Configuration
+
+Configure these in your `.env` file or container environment:
+
+| Variable | Default | Description |
+|---|---|---|
+| `HOST` | `127.0.0.1` | Network interface to bind to (`0.0.0.0` inside Docker). |
+| `PORT` | `8000` | HTTP port to listen on. |
+| `APP_PASSWORD` | *(empty)* | If set, all endpoints require HTTP Basic Auth with this password (any username). |
+| `ALLOWED_ORIGINS` | *(empty)* | Comma-separated list of allowed CORS origins (e.g. `https://myfrontend.com`). Defaults to same-origin. |
+| `TRUSTED_PROXIES` | `127.0.0.1,::1` | Comma-separated list of trusted proxy IPs/CIDRs authorized to pass `X-Forwarded-For` and `X-Real-IP`. |
+| `MAX_CONCURRENT_DOWNLOADS` | `2` | Maximum concurrent background download jobs permitted simultaneously. |
+| `JOB_TIMEOUT_SECONDS` | `1800` | Maximum execution time in seconds for a download job before it is terminated (prevents hung tasks). |
+| `FILE_TTL_MINUTES` | `30` | Time in minutes finished downloads remain on disk for browser retrieval before automated deletion. |
+| `RATE_LIMIT_INFO` | `30` | Requests per minute per IP for `/api/info`. |
+| `RATE_LIMIT_DOWNLOAD` | `10` | Requests per minute per IP for `/api/download`. |
+| `EMBED_METADATA` | `true` | Embed title, artist, date, chapters, and thumbnail artwork into downloaded media. |
+| `YTDLP_AUTO_UPDATE` | `false` | Run `pip install -U yt-dlp` automatically upon application startup. |
+| `COOKIES_FILE` | *(empty)* | Path to Netscape-format `cookies.txt` for login-gated Instagram or age-restricted YouTube media. |
+| `COOKIES_FROM_BROWSER` | *(empty)* | Browser name (e.g. `firefox`, `chrome`) to extract cookies from directly (bare-metal only). |
+| `FFMPEG_LOCATION` | *(empty)* | Custom directory containing `ffmpeg` and `ffprobe` binaries if not in system `PATH`. |
+| `JS_RUNTIMES` | `deno,node,bun` | Priority order of JavaScript runtimes for YouTube challenge solving. |
+| `DATA_DIR` | `./data` | Directory where SQLite history database (`history.db`) is stored. |
+| `DOWNLOAD_DIR` | `./downloads` | Root scratch directory for temporary per-job download folders. |
+
+---
+
+## Database Migrations
+
+The application manages SQLite migrations automatically via `app/storage.py`:
+
+- The history table schema:
+  ```sql
+  CREATE TABLE IF NOT EXISTS history (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      url          TEXT NOT NULL,
+      platform     TEXT NOT NULL,
+      title        TEXT NOT NULL,
+      uploader     TEXT,
+      thumbnail    TEXT,
+      option_id    TEXT NOT NULL,
+      option_label TEXT NOT NULL,
+      ext          TEXT NOT NULL,
+      filesize     INTEGER,
+      item_count   INTEGER,
+      created_at   TEXT NOT NULL
+  );
+  ```
+- Migrations run automatically on application startup inside a thread-safe transaction.
+- SQLite is configured with **Write-Ahead Logging (WAL)** and **busy timeouts** for high concurrency without lock contention.
+- No manual SQL scripts or external migration tools (e.g. Alembic) are required.
+
+To backup or reset history:
+```bash
+# Backup
+cp data/history.db data/history.db.bak
+
+# Reset history
+rm data/history.db
+```
+
+---
+
+## Command Line Interface (CLI)
+
+The CLI uses the exact same core engine without needing a web server:
+
+```bash
+# Inspect available curated options for any URL
+python -m app.cli "https://youtu.be/aqz-KE-bpKQ"
+
+# Download a specific quality tier into ./downloads
+python -m app.cli "https://youtu.be/aqz-KE-bpKQ" -o 1080
+
+# Download MP3 audio directly to a custom folder
+python -m app.cli "https://open.spotify.com/track/4PTG3Z6ehGkBFwjybzWkR8" -o mp3 --out /media/music
+```
+
+---
+
+## Testing & Quality Assurance
+
+Run the comprehensive test suite with `pytest`:
+
+```bash
+# Run all tests
+pytest
+
+# Run tests with detailed verbosity
+pytest -v
+
+# Run production hardening tests specifically
+pytest tests/test_production_hardening.py -v
+```
+
+All 220 automated tests cover:
+- URL validation and BCP-47 locale handling (`intl-es-419`, `intl-pt-BR`, `intl-fil`).
+- Format curation, short-side aspect ratio handling, and size estimation.
+- Playlists, Instagram carousels, and subtitle conversions.
+- Spotify metadata parsing, YouTube matching, and PNG/JPEG cover art tagging.
+- Twitter/X video and multi-video post curation.
+- SSRF prevention, IP resolution, and safe redirect validation.
+- Database WAL mode, transaction rollback, and rate limiter memory leak prevention.
+- Job timeouts and orphaned scratch file cleanup.
+
+---
+
+## Troubleshooting & Maintenance
+
+| Issue | Cause | Solution |
+|---|---|---|
+| **"ffmpeg isn't installed" warning** | `ffmpeg` binary not found in system `PATH`. | Install ffmpeg via OS package manager or set `FFMPEG_LOCATION=/path/to/bin`. |
+| **"Confirm you're not a bot" / "Sign in"** | YouTube or Instagram bot detection triggered. | Export Netscape cookies from your browser and set `COOKIES_FILE=cookies.txt`. |
+| **Downloads suddenly fail across a platform** | Upstream site changed layout or API. | Update yt-dlp: `pip install -U "yt-dlp[default]"` and restart server. |
+| **Instagram video missing audio** | Instagram often strips audio for unauthenticated requests. | Provide cookies via `COOKIES_FILE=cookies.txt`. |
+| **Only low resolutions available on YouTube** | Missing JavaScript runtime for player cipher challenge. | Install Deno (`deno`) or Node.js (`node`). |
+| **Download doesn't trigger automatically on iOS** | Mobile Safari security policy on programmatic downloads. | Tap the **Save file** button displayed upon completion. |
+| **Spotify link rejected** | Short URL (`spotify.link`) or unsupported link type. | Open the short link in a browser and copy the full `open.spotify.com/track/...` link. |
+| **Address already in use** | Another service is using port 8000. | Change `PORT=8001` in `.env`. |
+
+---
+
+## Deployment Rollback Instructions
+
+If a rollback is required during a deployment:
+
+1. **Docker Deployment**:
+   ```bash
+   # Revert to previous image or commit
+   git checkout <previous-release-tag>
+   docker compose up -d --build
+   ```
+2. **Systemd Deployment**:
+   ```bash
+   sudo systemctl stop grab
+   git checkout <previous-release-tag>
+   pip install -r requirements.txt
+   sudo systemctl start grab
+   ```
+3. **Database Compatibility**:
+   The SQLite schema is strictly backward-compatible. Rolling back application code will not corrupt `data/history.db`.
