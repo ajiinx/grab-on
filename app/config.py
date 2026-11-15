@@ -49,7 +49,7 @@ EMBED_METADATA = os.getenv("EMBED_METADATA", "true").lower() not in ("0", "false
 FILE_TTL_MINUTES = float(os.getenv("FILE_TTL_MINUTES", "30"))
 
 HOST = os.getenv("HOST", "127.0.0.1")
-PORT = int(os.getenv("PORT", "8000"))
+PORT = int(os.getenv("PORT", "8001"))
 # If set, every request needs HTTP Basic auth with this password (any username).
 APP_PASSWORD = os.getenv("APP_PASSWORD") or None
 # Run `pip install -U yt-dlp` before starting the server.
