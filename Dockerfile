@@ -22,7 +22,12 @@ COPY --chown=app:app requirements.txt .
 USER app
 RUN pip install --no-cache-dir -r requirements.txt
 COPY --chown=app:app app ./app
-RUN mkdir -p /app/data /app/downloads
+USER root
+
+RUN mkdir -p /app/data /app/downloads \
+    && chown -R app:app /app/data /app/downloads
+
+USER app
 
 EXPOSE 8000
 HEALTHCHECK --interval=60s --timeout=5s --start-period=20s \
